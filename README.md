@@ -212,6 +212,14 @@ python -B test_client.py image        # 图片生成
 | `CHATGPT_SESSION_TOKEN` | Session Token，用于自动续期（可选） | — |
 | `SESSION_FILE` | 续期后凭据的保存位置 | `session.json` |
 | `SESSION_REFRESH_BASE_URL` | 会话刷新页面的对外地址（可选） | 请求地址 |
+| `CHATGPT_TIMEZONE` | 发给 ChatGPT 的时区（IANA 名称） | `Asia/Shanghai` |
+| `CHATGPT_LANGUAGE` | 发给 ChatGPT 的语言（`OAI-Language` / `Accept-Language`） | `zh-CN` |
+
+### 时区与语言 / Timezone and language
+
+默认按北京时间、简体中文访问 ChatGPT，与原行为一致。若部署在其他时区，或希望回复（包括思考过程）使用其他语言，可设置 `CHATGPT_TIMEZONE`（如 `Europe/Berlin`）和 `CHATGPT_LANGUAGE`（如 `en-US`）。
+
+By default the gateway presents itself to ChatGPT as Beijing time and Simplified Chinese, exactly as before. Set `CHATGPT_TIMEZONE` (for example `Europe/Berlin`) so that "today" in answers matches your location, and `CHATGPT_LANGUAGE` (for example `en-US`) so that replies and the visible reasoning summary are not in Chinese. An invalid timezone fails at startup.
 
 ## 📁 项目结构
 
