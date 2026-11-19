@@ -188,6 +188,25 @@ curl http://localhost:8700/v1/chat/completions \
 
 Every request creates a chat in the ChatGPT account. The non-streamed response (and the last chunk of a streamed one) carries `conversation_id` and `conversation_url`, a link that opens the chat in the browser. Pass `conversation_id` in the request body to continue that chat: ChatGPT keeps the context, so `messages` only needs the new message. The `/v1/conversations` endpoints in the table above list (newest first), search (ChatGPT's own search over titles and message text, paged by `cursor`), read (the visible user and assistant messages of the current branch), archive or unarchive, and delete chats.
 
+## 🤖 AI Agent（MCP）
+
+网关在 `/mcp` 提供一个极简的 MCP 服务（Streamable HTTP，无状态，无额外依赖），Claude Code、Cursor 等支持 MCP 的 agent 可以直接调用：
+
+```json
+{"mcpServers": {"chatgpt": {"type": "http", "url": "http://127.0.0.1:8700/mcp"}}}
+```
+
+| 工具 | 说明 |
+|------|------|
+| `chatgpt_ask(prompt, conversation_id?, model?)` | 提问，返回回答及 `conversation_id` / `conversation_url`；带 `conversation_id` 时继续该对话 |
+| `chatgpt_list_conversations(q?, limit?)` | 列出或搜索对话 |
+| `chatgpt_read_conversation(conversation_id)` | 读取对话消息 |
+| `chatgpt_session_link()` | 会话失效时生成一次性刷新链接（仅限本机） |
+
+[`skills/chat2api/SKILL.md`](skills/chat2api/SKILL.md) 是一份 [Agent Skill](https://agentskills.io)，告诉 agent 如何使用上述接口，以及遇到 `session_expired` 时如何引导用户刷新会话。复制到 agent 的 skills 目录即可（如 `~/.claude/skills/chat2api/`）。
+
+The gateway serves a minimal MCP endpoint at `/mcp` (stateless streamable HTTP, JSON responses only, no extra dependency), so MCP-capable agents such as Claude Code or Cursor can ask ChatGPT, continue a chat, list, search and read chats, and create a session refresh link (localhost only) with the tools in the table above. Requests with a non-local `Origin` header are refused, as the MCP specification requires. [`skills/chat2api/SKILL.md`](skills/chat2api/SKILL.md) is an [Agent Skill](https://agentskills.io) that explains to an agent how to use the API and MCP tools and how to walk the user through the session refresh after `session_expired`. Copy it into your agent's skills directory, for example `~/.claude/skills/chat2api/`.
+
 ## 🧪 测试
 
 ```bash
@@ -230,6 +249,7 @@ By default the gateway presents itself to ChatGPT as Beijing time and Simplified
 ├── routes_chat.py       # /v1/chat/completions（流式 + 非流式）
 ├── routes_conversations.py  # /v1/conversations（列出 / 搜索 / 读取 / 归档 / 删除）
 ├── routes_images.py     # /v1/images/generations（图片保存本地）
+├── routes_mcp.py        # /mcp（供 AI agent 使用的 MCP 服务）
 ├── routes_session.py    # 一次性会话刷新页面
 ├── web_session.py       # Access Token 自动续期
 ├── web_client.py        # Web 图片生成完整流程
@@ -238,6 +258,7 @@ By default the gateway presents itself to ChatGPT as Beijing time and Simplified
 ├── web_sse_parser.py    # SSE 流解析
 ├── image_utils.py       # 尺寸/比例映射
 ├── test_client.py       # 测试脚本
+├── skills/chat2api/     # AI agent 使用说明（Agent Skill）
 └── images/              # 生成的图片
 ```
 

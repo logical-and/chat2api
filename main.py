@@ -21,6 +21,7 @@ from routes_chat import router as chat_router
 from routes_conversations import router as conversations_router
 from routes_images import router as images_router
 from routes_images import IMAGES_DIR
+from routes_mcp import router as mcp_router
 from routes_session import router as session_router
 from web_session import AuthError, has_session
 
@@ -58,6 +59,7 @@ app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(images_router)
 app.include_router(session_router)
+app.include_router(mcp_router)
 
 # 静态文件：提供生成的图片
 app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
