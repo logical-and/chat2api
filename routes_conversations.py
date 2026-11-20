@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from config import settings
 from http_client import build_session
-from routes_chat import CONVERSATION_ID_PATTERN
+from routes_chat import CONVERSATION_ID_PATTERN, WORK_ORIGIN
 from web_fingerprint import WebFingerprint
 from web_session import call_with_renew, check_auth
 
@@ -82,7 +82,7 @@ async def list_conversations(q: str = "", limit: Annotated[int, Query(ge=1, le=1
 
 @router.get("/v1/conversations/{conversation_id}")
 async def read_conversation(conversation_id: ConversationId):
-    """当前分支中可见的用户和助手消息，按时间正序。"""
+    """当前分支中可见的用户和助手消息（按时间正序），以及 ChatGPT 在其中发布的站点（可分享的 artifact）链接。"""
     status, data = await _backend("GET", f"/backend-api/conversation/{conversation_id}")
     if status >= 400:
         return _error(status, data)
@@ -91,8 +91,9 @@ async def read_conversation(conversation_id: ConversationId):
         entry = data["mapping"][node]
         chain.append(entry.get("message"))
         node = entry.get("parent")
-    messages = []
+    messages, sites = [], {}
     for m in reversed(chain):
+        sites.update(((m or {}).get("metadata") or {}).get("site_url_to_site_id") or {})
         if (not m or m["author"]["role"] not in ("user", "assistant") or m.get("recipient") != "all"
                 or m.get("content", {}).get("content_type") != "text"
                 or (m.get("metadata") or {}).get("is_visually_hidden_from_conversation")):
@@ -103,7 +104,8 @@ async def read_conversation(conversation_id: ConversationId):
                              "model": (m.get("metadata") or {}).get("model_slug"), "text": text})
     return {"id": conversation_id, "title": data.get("title"), "create_time": _iso(data.get("create_time")),
             "update_time": _iso(data.get("update_time")), "is_archived": data.get("is_archived"),
-            "url": _url(conversation_id), "messages": messages}
+            "url": _url(conversation_id), "mode": "work" if data.get("conversation_origin") == WORK_ORIGIN else "chat",
+            "messages": messages, "artifacts": [{"url": url, "id": site_id} for url, site_id in sites.items()]}
 
 
 @router.patch("/v1/conversations/{conversation_id}")

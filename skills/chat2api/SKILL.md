@@ -11,9 +11,9 @@ chat2api runs on the user's machine (default `http://127.0.0.1:8700`) and talks 
 
 If the gateway is registered as an MCP server (streamable HTTP, URL `http://127.0.0.1:8700/mcp`), use its tools:
 
-- `chatgpt_ask(prompt, conversation_id?, model?)`: returns the answer followed by `conversation_id` and `conversation_url`. Pass `conversation_id` to continue the same chat; ChatGPT keeps the context, so send only the new question. Thinking models can take several minutes, so allow a long tool timeout.
+- `chatgpt_ask(prompt, conversation_id?, model?, mode?)`: returns the answer followed by `conversation_id`, `conversation_url` and `mode`. Pass `conversation_id` to continue the same chat; ChatGPT keeps the context, so send only the new question, and the chat keeps its mode. `mode` is `chat` or `work` (ChatGPT's Work mode: it can use tools and publish shareable artifacts such as small web pages) and only matters for a new chat. Thinking models and Work tasks can take several minutes, so allow a long tool timeout.
 - `chatgpt_list_conversations(q?, limit?)`: newest chats first; `q` uses ChatGPT's own search over titles and message text.
-- `chatgpt_read_conversation(conversation_id)`: the visible user and assistant messages.
+- `chatgpt_read_conversation(conversation_id)`: the visible user and assistant messages, the chat's `mode` and `artifacts` (links of what ChatGPT published in it). Give the user an artifact link from there if the answer did not include it.
 - `chatgpt_session_link()`: a one-time URL for replacing a dead session (see below).
 
 Example client configuration:
@@ -28,6 +28,10 @@ Example client configuration:
 # Ask; the response carries conversation_id and conversation_url
 curl -s http://127.0.0.1:8700/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Question"}]}'
+
+# Work mode for a new chat (the model defaults to the account's default Work model)
+curl -s http://127.0.0.1:8700/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"mode":"work","messages":[{"role":"user","content":"Task"}]}'
 
 # Continue that chat: send only the new message
 curl -s http://127.0.0.1:8700/v1/chat/completions -H "Content-Type: application/json" \

@@ -12,8 +12,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
-from config import settings
-from routes_chat import CONVERSATION_ID_PATTERN, _complete_chat
+from routes_chat import CONVERSATION_ID_PATTERN, MODES, _complete_chat
 from routes_conversations import list_conversations, read_conversation
 from routes_session import LOCAL_HOSTS, create_link
 from web_session import AuthError, call_with_renew
@@ -31,14 +30,20 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["prompt"], "properties": {
          "prompt": {"type": "string"},
          "conversation_id": {**CONVERSATION_ID, "description": "Continue this chat instead of starting a new one"},
-         "model": {"type": "string", "description": "ChatGPT model slug, e.g. gpt-4o (default: WEB_CHAT_MODEL)"},
+         "model": {"type": "string", "description": "ChatGPT model slug, e.g. gpt-4o (default: WEB_CHAT_MODEL, "
+                                                    "in Work mode WEB_WORK_MODEL or the account's default Work model)"},
+         "mode": {"type": "string", "enum": list(MODES), "description": "chat or work (ChatGPT's Work mode, which can use "
+                                                                        "tools and publish shareable artifacts) for a new "
+                                                                        "chat (default: WEB_DEFAULT_MODE); a continued chat "
+                                                                        "keeps its own mode"},
      }}},
     {"name": "chatgpt_list_conversations", "description": "List the account's chats, newest first, or search them with q.",
      "inputSchema": {"type": "object", "properties": {
          "q": {"type": "string", "description": "Search titles and message text"},
          "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
      }}, "annotations": {"readOnlyHint": True}},
-    {"name": "chatgpt_read_conversation", "description": "Read the visible user and assistant messages of a chat.",
+    {"name": "chatgpt_read_conversation", "description": "Read the visible user and assistant messages of a chat, its mode "
+                                                         "and the links of the artifacts ChatGPT published in it.",
      "inputSchema": {"type": "object", "required": ["conversation_id"], "properties": {"conversation_id": CONVERSATION_ID}},
      "annotations": {"readOnlyHint": True}},
     {"name": "chatgpt_session_link", "description": "Create a one-time URL (valid 30 minutes) where the user pastes a new "
@@ -65,13 +70,18 @@ async def _ask(args: dict[str, Any]) -> str | Response:
     body: dict[str, Any] = {"messages": [{"role": "user", "content": args["prompt"]}]}
     if args.get("conversation_id"):
         body["conversation_id"] = _conversation_id(args["conversation_id"])
-    model = args.get("model") or settings.web_chat_model
-    resp = await call_with_renew(lambda token: _complete_chat(token, model, body))
+    if args.get("mode"):
+        if args["mode"] not in MODES:
+            raise ValueError(f"mode must be one of {', '.join(MODES)}")
+        body["mode"] = args["mode"]
+    if args.get("model"):
+        body["model"] = args["model"]
+    resp = await call_with_renew(lambda token: _complete_chat(token, body))
     if resp.status_code >= 400:
         return resp
     data = json.loads(resp.body)
     return (f"{data['choices'][0]['message']['content']}\n\n---\n"
-            f"conversation_id: {data['conversation_id']}\nconversation_url: {data['conversation_url']}")
+            f"conversation_id: {data['conversation_id']}\nconversation_url: {data['conversation_url']}\nmode: {data['mode']}")
 
 
 async def _call_tool(name: str, args: dict[str, Any], request: Request) -> dict[str, Any]:

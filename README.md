@@ -120,6 +120,11 @@ curl http://localhost:8700/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}],"stream":true}'
 
+# Work 模式（composer 中的 Chat / Work 开关）：可调用工具并发布可分享的 artifact
+curl http://localhost:8700/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"work","messages":[{"role":"user","content":"hello"}]}'
+
 # 生成图片
 curl http://localhost:8700/v1/images/generations \
   -H "Content-Type: application/json" \
@@ -170,7 +175,7 @@ To replace a dead session without editing `.env` or restarting, create a one-tim
 
 ## 💬 对话管理 / Conversations
 
-每次请求都会在 ChatGPT 账号中生成一条对话。非流式响应（以及流式响应的最后一个 chunk）附带 `conversation_id` 和 `conversation_url`（可在浏览器中打开）。请求体中带上 `conversation_id` 即可在该对话中继续提问，ChatGPT 会保留上下文，此时 `messages` 只需包含新消息：
+每次请求都会在 ChatGPT 账号中生成一条对话。非流式响应（以及流式响应的最后一个 chunk）附带 `conversation_id` 和 `conversation_url`（可在浏览器中打开）。请求体中带上 `conversation_id` 即可在该对话中继续提问，ChatGPT 会保留上下文，此时 `messages` 只需包含新消息，并沿用该对话的模式（chat 或 Work）：
 
 ```bash
 curl http://localhost:8700/v1/chat/completions \
@@ -182,11 +187,11 @@ curl http://localhost:8700/v1/chat/completions \
 |------|------|
 | `GET /v1/conversations?limit=20&offset=0` | 按更新时间倒序列出对话（`archived=true` 列出已归档） |
 | `GET /v1/conversations?q=关键词&cursor=` | 使用 ChatGPT 自带搜索（标题和消息内容），用 `cursor` 翻页 |
-| `GET /v1/conversations/{id}` | 读取对话当前分支中可见的用户和助手消息 |
+| `GET /v1/conversations/{id}` | 读取对话当前分支中可见的用户和助手消息、对话模式（`mode`）和发布的 artifact 链接（`artifacts`） |
 | `PATCH /v1/conversations/{id}` | 归档 / 取消归档：`{"is_archived": true}` |
 | `DELETE /v1/conversations/{id}` | 删除对话（ChatGPT 不提供恢复） |
 
-Every request creates a chat in the ChatGPT account. The non-streamed response (and the last chunk of a streamed one) carries `conversation_id` and `conversation_url`, a link that opens the chat in the browser. Pass `conversation_id` in the request body to continue that chat: ChatGPT keeps the context, so `messages` only needs the new message. The `/v1/conversations` endpoints in the table above list (newest first), search (ChatGPT's own search over titles and message text, paged by `cursor`), read (the visible user and assistant messages of the current branch), archive or unarchive, and delete chats.
+Every request creates a chat in the ChatGPT account. The non-streamed response (and the last chunk of a streamed one) carries `conversation_id` and `conversation_url`, a link that opens the chat in the browser. Pass `conversation_id` in the request body to continue that chat: ChatGPT keeps the context, so `messages` only needs the new message. A continued chat keeps its own mode (chat or Work). The `/v1/conversations` endpoints in the table above list (newest first), search (ChatGPT's own search over titles and message text, paged by `cursor`), read (the visible user and assistant messages of the current branch, the chat's `mode` and the links of the artifacts ChatGPT published in it), archive or unarchive, and delete chats.
 
 ## 🤖 AI Agent（MCP）
 
@@ -228,6 +233,8 @@ python -B test_client.py image        # 图片生成
 | `TIMEOUT` | 请求超时（秒） | `600` |
 | `WEB_IMAGE_MODEL` | 图片生成模型 | `gpt-5-5-thinking` |
 | `WEB_CHAT_MODEL` | 对话默认模型 | `gpt-4o` |
+| `WEB_DEFAULT_MODE` | 新对话的模式：`chat` 或 `work`（ChatGPT 的 Work 模式） | `chat` |
+| `WEB_WORK_MODEL` | Work 模式默认模型，留空则使用账号的默认 Work 模型 | — |
 | `CHATGPT_SESSION_TOKEN` | Session Token，用于自动续期（可选） | — |
 | `SESSION_FILE` | 续期后凭据的保存位置 | `session.json` |
 | `SESSION_REFRESH_BASE_URL` | 会话刷新页面的对外地址（可选） | 请求地址 |

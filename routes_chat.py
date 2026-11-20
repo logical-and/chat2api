@@ -19,6 +19,8 @@ from web_sse_parser import _CONVERSATION_ID_RE
 router = APIRouter()
 
 CONVERSATION_ID_PATTERN = r"^[0-9A-Za-z-]{1,64}$"
+MODES = ("chat", "work")
+WORK_ORIGIN = "tpp"  # ChatGPT Work 模式对话的 conversation_origin
 
 
 @router.post("/v1/chat/completions")
@@ -33,18 +35,19 @@ async def chat_completions(request: Request):
     if body.get("conversation_id") and not re.match(CONVERSATION_ID_PATTERN, str(body["conversation_id"])):
         return JSONResponse(status_code=400, content={"error": {"message": "invalid conversation_id"}})
 
-    model = body.get("model", settings.web_chat_model)
+    if body.get("mode") not in (None, *MODES):
+        return JSONResponse(status_code=400, content={"error": {"message": f"mode must be one of {', '.join(MODES)}"}})
     stream = body.get("stream", False)
 
     try:
         if stream:
-            first, chunks = await call_with_renew(lambda token: _start_stream(token, model, body))
+            first, chunks = await call_with_renew(lambda token: _start_stream(token, body))
             return StreamingResponse(
                 _resume_stream(first, chunks),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
             )
-        return await call_with_renew(lambda token: _complete_chat(token, model, body))
+        return await call_with_renew(lambda token: _complete_chat(token, body))
     except AuthError:
         raise
     except Exception as e:
@@ -53,7 +56,7 @@ async def chat_completions(request: Request):
         return JSONResponse(status_code=502, content={"error": {"message": str(e)}})
 
 
-async def _complete_chat(token: str, model: str, body: dict[str, Any]) -> JSONResponse:
+async def _complete_chat(token: str, body: dict[str, Any]) -> JSONResponse:
     """非流式 chat completion。"""
     fp = WebFingerprint()
     base = settings.chatgpt_base_url.rstrip("/")
@@ -62,16 +65,18 @@ async def _complete_chat(token: str, model: str, body: dict[str, Any]) -> JSONRe
         # 获取 requirements
         reqs = await _get_requirements(session, fp, base, token)
 
-        # 准备对话（带 conversation_id 时续写已有对话）
-        conversation_id, parent_id = await _continuation(session, fp, base, token, body.get("conversation_id"))
-        conduit = await _prepare_conversation(session, fp, base, token, model, reqs, conversation_id, parent_id)
+        # 准备对话（带 conversation_id 时续写已有对话，并沿用该对话的模式）
+        conversation_id, parent_id, chat_mode = await _continuation(session, fp, base, token, body.get("conversation_id"))
+        mode = chat_mode or body.get("mode") or settings.web_default_mode
+        model = body.get("model") or await _default_model(session, fp, base, token, mode)
+        conduit = await _prepare_conversation(session, fp, base, token, model, reqs, conversation_id, parent_id, mode)
 
         # 发起对话
         messages = body.get("messages", [])
         prompt = _messages_to_prompt(messages)
 
         path = "/backend-api/f/conversation"
-        conv_body = _build_conversation_body(model, prompt, conversation_id, parent_id)
+        conv_body = _build_conversation_body(model, prompt, conversation_id, parent_id, mode)
         headers = fp.image_headers(token, path, reqs["token"], reqs["proof_token"], reqs["so_token"], conduit=conduit, accept="text/event-stream")
 
         resp = await session.post(f"{base}{path}", json=conv_body, headers=headers)
@@ -92,13 +97,14 @@ async def _complete_chat(token: str, model: str, body: dict[str, Any]) -> JSONRe
             "object": "chat.completion",
             "created": int(time.time()),
             "model": model,
+            "mode": mode,
             **_conversation_fields(base, conversation_id),
             "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens},
         })
 
 
-async def _stream_chat(token: str, model: str, body: dict[str, Any]):
+async def _stream_chat(token: str, body: dict[str, Any]):
     """流式 chat completion — 先获取完整响应，再逐步输出给客户端。"""
     fp = WebFingerprint()
     base = settings.chatgpt_base_url.rstrip("/")
@@ -107,16 +113,18 @@ async def _stream_chat(token: str, model: str, body: dict[str, Any]):
         # 获取 requirements
         reqs = await _get_requirements(session, fp, base, token)
 
-        # 准备对话（带 conversation_id 时续写已有对话）
-        conversation_id, parent_id = await _continuation(session, fp, base, token, body.get("conversation_id"))
-        conduit = await _prepare_conversation(session, fp, base, token, model, reqs, conversation_id, parent_id)
+        # 准备对话（带 conversation_id 时续写已有对话，并沿用该对话的模式）
+        conversation_id, parent_id, chat_mode = await _continuation(session, fp, base, token, body.get("conversation_id"))
+        mode = chat_mode or body.get("mode") or settings.web_default_mode
+        model = body.get("model") or await _default_model(session, fp, base, token, mode)
+        conduit = await _prepare_conversation(session, fp, base, token, model, reqs, conversation_id, parent_id, mode)
 
         # 发起对话
         messages = body.get("messages", [])
         prompt = _messages_to_prompt(messages)
 
         path = "/backend-api/f/conversation"
-        conv_body = _build_conversation_body(model, prompt, conversation_id, parent_id)
+        conv_body = _build_conversation_body(model, prompt, conversation_id, parent_id, mode)
         headers = fp.image_headers(token, path, reqs["token"], reqs["proof_token"], reqs["so_token"], conduit=conduit, accept="text/event-stream")
 
         resp = await session.post(f"{base}{path}", json=conv_body, headers=headers)
@@ -168,9 +176,9 @@ async def _stream_chat(token: str, model: str, body: dict[str, Any]):
         yield "data: [DONE]\n\n"
 
 
-async def _start_stream(token: str, model: str, body: dict[str, Any]):
+async def _start_stream(token: str, body: dict[str, Any]):
     """先取第一个 chunk：上游请求都在这之前完成，Token 过期时还能续期重试。"""
-    chunks = _stream_chat(token, model, body)
+    chunks = _stream_chat(token, body)
     return await anext(chunks), chunks
 
 
@@ -205,16 +213,36 @@ async def _get_requirements(session, fp: WebFingerprint, base: str, token: str) 
     return {"token": req_token, "proof_token": proof, "so_token": data.get("so_token", "")}
 
 
-async def _continuation(session, fp: WebFingerprint, base: str, token: str, conversation_id: str | None) -> tuple[str | None, str]:
-    """续写已有对话时，返回对话 id 和其最新消息 id（新一轮的 parent）。"""
+async def _continuation(session, fp: WebFingerprint, base: str, token: str,
+                        conversation_id: str | None) -> tuple[str | None, str, str | None]:
+    """续写已有对话时，返回对话 id、其最新消息 id（新一轮的 parent）和对话的模式。"""
     if not conversation_id:
-        return None, "client-created-root"
+        return None, "client-created-root", None
     path = f"/backend-api/conversation/{conversation_id}"
     resp = await session.get(f"{base}{path}", headers=fp.base_headers(token, path))
     check_auth(resp)
     if resp.status_code >= 400:
         raise Exception(f"Conversation lookup failed: {resp.status_code}: {resp.text[:200]}")
-    return conversation_id, resp.json()["current_node"]
+    data = resp.json()
+    return conversation_id, data["current_node"], "work" if data.get("conversation_origin") == WORK_ORIGIN else "chat"
+
+
+async def _default_model(session, fp: WebFingerprint, base: str, token: str, mode: str) -> str:
+    """chat 模式用 WEB_CHAT_MODEL；work 模式用 WEB_WORK_MODEL，未配置时用账号的默认 Work 模型。"""
+    if mode == "chat":
+        return settings.web_chat_model
+    if settings.web_work_model:
+        return settings.web_work_model
+    path = "/backend-api/tpp/models/"
+    resp = await session.get(f"{base}{path}", headers=fp.base_headers(token, path))
+    check_auth(resp)
+    if resp.status_code >= 400:
+        raise Exception(f"Work models lookup failed: {resp.status_code}: {resp.text[:200]}")
+    return resp.json()["default_model_slug"]
+
+
+def _mode_fields(mode: str) -> dict[str, Any]:
+    return {"conversation_origin": WORK_ORIGIN} if mode == "work" else {}
 
 
 def _conversation_ref(conversation_id: str | None, parent_id: str) -> dict[str, Any]:
@@ -235,7 +263,8 @@ def _conversation_fields(base: str, conversation_id: str) -> dict[str, str]:
 
 
 async def _prepare_conversation(session, fp: WebFingerprint, base: str, token: str, model: str, reqs: dict[str, str],
-                                conversation_id: str | None = None, parent_id: str = "client-created-root") -> str:
+                                conversation_id: str | None = None, parent_id: str = "client-created-root",
+                                mode: str = "chat") -> str:
     """准备对话获取 conduit token。"""
     path = "/backend-api/f/conversation/prepare"
     body = {
@@ -245,6 +274,7 @@ async def _prepare_conversation(session, fp: WebFingerprint, base: str, token: s
         "model": model,
         "client_prepare_state": "none",
         **timezone_fields(),
+        **_mode_fields(mode),
         "conversation_mode": {"kind": "primary_assistant"},
         "system_hints": [],
         "supports_buffering": True,
@@ -266,7 +296,7 @@ async def _prepare_conversation(session, fp: WebFingerprint, base: str, token: s
 
 
 def _build_conversation_body(model: str, prompt: str, conversation_id: str | None = None,
-                             parent_id: str = "client-created-root") -> dict[str, Any]:
+                             parent_id: str = "client-created-root", mode: str = "chat") -> dict[str, Any]:
     """构造对话请求体。"""
     return {
         "action": "next",
@@ -275,6 +305,7 @@ def _build_conversation_body(model: str, prompt: str, conversation_id: str | Non
         "model": model,
         "client_prepare_state": "success",
         **timezone_fields(),
+        **_mode_fields(mode),
         "conversation_mode": {"kind": "primary_assistant"},
         "enable_message_followups": True,
         "system_hints": [],
@@ -364,6 +395,9 @@ def _extract_content_from_web_chunk(payload: str) -> str:
 
     author = msg.get("author")
     if not isinstance(author, dict) or author.get("role") != "assistant":
+        return ""
+    # Work 模式会先在 commentary 频道输出进度说明，最终回答在其后
+    if msg.get("channel") == "commentary":
         return ""
 
     content = msg.get("content")
